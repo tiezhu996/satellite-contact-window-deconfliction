@@ -17,6 +17,12 @@ func NewSatelliteAssetHandler(service *service.SatelliteAssetService) *Satellite
 	return &SatelliteAssetHandler{service: service}
 }
 
+// serviceFor binds the service to the request context so that a client
+// disconnect cancels in-flight queries and rolls back open transactions.
+func (handler *SatelliteAssetHandler) serviceFor(context *gin.Context) *service.SatelliteAssetService {
+	return handler.service.WithContext(context.Request.Context())
+}
+
 func (handler *SatelliteAssetHandler) List(context *gin.Context) {
 	page, pageSize := Pagination(context)
 	assets, meta, err := handler.service.List(page, pageSize, context.Query("status"), context.Query("search"))
@@ -33,7 +39,7 @@ func (handler *SatelliteAssetHandler) Get(context *gin.Context) {
 		WriteError(context, err)
 		return
 	}
-	asset, err := handler.service.Get(id)
+	asset, err := handler.serviceFor(context).Get(id)
 	if err != nil {
 		WriteError(context, err)
 		return
@@ -47,7 +53,7 @@ func (handler *SatelliteAssetHandler) Create(context *gin.Context) {
 		WriteError(context, err)
 		return
 	}
-	asset, err := handler.service.Create(request, Actor(context), RequestID(context))
+	asset, err := handler.serviceFor(context).Create(request, Actor(context), RequestID(context))
 	if err != nil {
 		WriteError(context, err)
 		return
@@ -66,7 +72,7 @@ func (handler *SatelliteAssetHandler) Update(context *gin.Context) {
 		WriteError(context, err)
 		return
 	}
-	asset, err := handler.service.Update(id, request, Actor(context), RequestID(context))
+	asset, err := handler.serviceFor(context).Update(id, request, Actor(context), RequestID(context))
 	if err != nil {
 		WriteError(context, err)
 		return

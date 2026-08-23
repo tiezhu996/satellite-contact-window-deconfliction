@@ -15,6 +15,12 @@ func NewGroundStationHandler(service *service.GroundStationService) *GroundStati
 	return &GroundStationHandler{service: service}
 }
 
+// serviceFor binds the service to the request context so that a client
+// disconnect cancels in-flight queries and rolls back open transactions.
+func (handler *GroundStationHandler) serviceFor(context *gin.Context) *service.GroundStationService {
+	return handler.service.WithContext(context.Request.Context())
+}
+
 func (handler *GroundStationHandler) List(context *gin.Context) {
 	page, pageSize := Pagination(context)
 	stations, meta, err := handler.service.List(page, pageSize, context.Query("status"), context.Query("search"))
@@ -31,7 +37,7 @@ func (handler *GroundStationHandler) Get(context *gin.Context) {
 		WriteError(context, err)
 		return
 	}
-	station, err := handler.service.Get(id)
+	station, err := handler.serviceFor(context).Get(id)
 	if err != nil {
 		WriteError(context, err)
 		return
@@ -45,7 +51,7 @@ func (handler *GroundStationHandler) Create(context *gin.Context) {
 		WriteError(context, err)
 		return
 	}
-	station, err := handler.service.Create(request, Actor(context), RequestID(context))
+	station, err := handler.serviceFor(context).Create(request, Actor(context), RequestID(context))
 	if err != nil {
 		WriteError(context, err)
 		return
@@ -64,7 +70,7 @@ func (handler *GroundStationHandler) Update(context *gin.Context) {
 		WriteError(context, err)
 		return
 	}
-	station, err := handler.service.Update(id, request, Actor(context), RequestID(context))
+	station, err := handler.serviceFor(context).Update(id, request, Actor(context), RequestID(context))
 	if err != nil {
 		WriteError(context, err)
 		return

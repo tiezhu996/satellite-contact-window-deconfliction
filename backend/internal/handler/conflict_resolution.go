@@ -17,9 +17,16 @@ func NewConflictResolutionHandler(service *service.ConflictResolutionService) *C
 	return &ConflictResolutionHandler{service: service}
 }
 
+// serviceFor binds the service to the request context so that a client
+// disconnect cancels in-flight queries, rolls back open transactions, and stops
+// long detection loops early.
+func (handler *ConflictResolutionHandler) serviceFor(context *gin.Context) *service.ConflictResolutionService {
+	return handler.service.WithContext(context.Request.Context())
+}
+
 func (handler *ConflictResolutionHandler) List(context *gin.Context) {
 	page, pageSize := Pagination(context)
-	resolutions, meta, err := handler.service.List(page, pageSize, context.Query("status"), context.Query("conflict_type"))
+	resolutions, meta, err := handler.serviceFor(context).List(page, pageSize, context.Query("status"), context.Query("conflict_type"))
 	if err != nil {
 		WriteError(context, err)
 		return
@@ -33,7 +40,7 @@ func (handler *ConflictResolutionHandler) Get(context *gin.Context) {
 		WriteError(context, err)
 		return
 	}
-	resolution, err := handler.service.Get(id)
+	resolution, err := handler.serviceFor(context).Get(id)
 	if err != nil {
 		WriteError(context, err)
 		return
@@ -47,7 +54,7 @@ func (handler *ConflictResolutionHandler) Detect(context *gin.Context) {
 		WriteError(context, err)
 		return
 	}
-	result, err := handler.service.Detect(request, Actor(context), RequestID(context))
+	result, err := handler.serviceFor(context).Detect(request, Actor(context), RequestID(context))
 	if err != nil {
 		WriteError(context, err)
 		return
@@ -66,7 +73,7 @@ func (handler *ConflictResolutionHandler) Submit(context *gin.Context) {
 		WriteError(context, err)
 		return
 	}
-	resolution, err := handler.service.Submit(id, request, Actor(context), RequestID(context))
+	resolution, err := handler.serviceFor(context).Submit(id, request, Actor(context), RequestID(context))
 	if err != nil {
 		WriteError(context, err)
 		return
@@ -85,7 +92,7 @@ func (handler *ConflictResolutionHandler) Review(context *gin.Context) {
 		WriteError(context, err)
 		return
 	}
-	resolution, err := handler.service.Review(id, request, Actor(context), RequestID(context))
+	resolution, err := handler.serviceFor(context).Review(id, request, Actor(context), RequestID(context))
 	if err != nil {
 		WriteError(context, err)
 		return
@@ -99,7 +106,7 @@ func (handler *ConflictResolutionHandler) Export(context *gin.Context) {
 		WriteError(context, err)
 		return
 	}
-	record, err := handler.service.Export(id)
+	record, err := handler.serviceFor(context).Export(id)
 	if err != nil {
 		WriteError(context, err)
 		return

@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"fmt"
 
 	"gorm.io/gorm"
@@ -17,6 +18,13 @@ func NewConflictResolutionRepository(db *gorm.DB) *ConflictResolutionRepository 
 
 func (repository *ConflictResolutionRepository) WithDB(db *gorm.DB) *ConflictResolutionRepository {
 	return &ConflictResolutionRepository{db: db}
+}
+
+// WithContext returns a copy of the repository bound to the request context so
+// that the underlying connection (and any in-flight query) is cancelled when the
+// client disconnects. Repository method signatures stay unchanged.
+func (repository *ConflictResolutionRepository) WithContext(ctx context.Context) *ConflictResolutionRepository {
+	return &ConflictResolutionRepository{db: repository.db.WithContext(ctx)}
 }
 
 func (repository *ConflictResolutionRepository) DB() *gorm.DB { return repository.db }

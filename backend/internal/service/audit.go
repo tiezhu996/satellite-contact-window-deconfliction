@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -16,6 +17,13 @@ type AuditService struct{ repository *repository.SystemRepository }
 
 func NewAuditService(repository *repository.SystemRepository) *AuditService {
 	return &AuditService{repository: repository}
+}
+
+// WithContext returns a copy of the audit service bound to the request context
+// so audit writes are cancelled alongside the work they describe. Method
+// signatures stay unchanged.
+func (service *AuditService) WithContext(ctx context.Context) *AuditService {
+	return &AuditService{repository: service.repository.WithContext(ctx)}
 }
 
 func (service *AuditService) Record(actor dto.Actor, requestID, action, resourceType, resourceID string, parameters, before, after any) error {

@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -18,6 +19,15 @@ func NewGroundStationRepository(db *gorm.DB) *GroundStationRepository {
 func (repository *GroundStationRepository) WithDB(db *gorm.DB) *GroundStationRepository {
 	return &GroundStationRepository{db: db}
 }
+
+// WithContext returns a copy of the repository bound to the request context so
+// that the underlying connection (and any in-flight query) is cancelled when the
+// client disconnects. Repository method signatures stay unchanged.
+func (repository *GroundStationRepository) WithContext(ctx context.Context) *GroundStationRepository {
+	return &GroundStationRepository{db: repository.db.WithContext(ctx)}
+}
+
+func (repository *GroundStationRepository) DB() *gorm.DB { return repository.db }
 
 func (repository *GroundStationRepository) List(page, pageSize int, status, search string) ([]model.GroundStation, int64, error) {
 	query := repository.db.Model(&model.GroundStation{})

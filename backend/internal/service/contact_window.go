@@ -1,9 +1,13 @@
 package service
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
+
+	"gorm.io/gorm"
 
 	"satellite-contact-window-deconfliction/backend/internal/constants"
 	"satellite-contact-window-deconfliction/backend/internal/dto"
@@ -21,6 +25,21 @@ type ContactWindowService struct {
 func NewContactWindowService(windowRepository *repository.ContactWindowRepository, stations *repository.GroundStationRepository, assets *repository.SatelliteAssetRepository, audit *AuditService) *ContactWindowService {
 	return &ContactWindowService{repository: windowRepository, stations: stations, assets: assets, audit: audit}
 }
+
+// WithContext returns a copy of the service whose repositories and audit log are
+// bound to the request context. When the client disconnects, in-flight queries
+// are cancelled and open transactions roll back, so a half-finished mutation is
+// never committed. Method signatures stay unchanged.
+func (service *ContactWindowService) WithContext(ctx context.Context) *ContactWindowService {
+	return &ContactWindowService{
+		repository: service.repository.WithContext(ctx),
+		stations:   service.stations.WithContext(ctx),
+		assets:     service.assets.WithContext(ctx),
+		audit:      service.audit.WithContext(ctx),
+	}
+}
+
+var _ = errors.Is
 
 func (service *ContactWindowService) List(filter dto.ContactWindowFilter) ([]dto.ContactWindowResponse, dto.PageMeta, error) {
 	windows, total, err := service.repository.List(filter)
@@ -63,10 +82,17 @@ func (service *ContactWindowService) Create(request dto.CreateContactWindowReque
 		ElevationPeakDeg: request.ElevationPeakDeg, WindowStatus: constants.WindowStatusCandidate, Priority: request.Priority,
 		Locked: false, SourceVersion: strings.TrimSpace(request.SourceVersion), Version: 1,
 	}
-	if err := service.repository.Create(&window); err != nil {
-		return dto.ContactWindowResponse{}, Internal("could not create contact window", err)
-	}
-	if err := service.audit.Record(actor, requestID, "window.created", "contact_window", auditID(window.ID), map[string]any{"source_version": window.SourceVersion}, nil, windowSummary(window)); err != nil {
+	// Persist the window and its audit trail inside one transaction so that a
+	// client disconnect (context cancellation) rolls back both, leaving no
+	// orphaned window that the user never saw succeed.
+	err = service.repository.DB().Transaction(func(tx *gorm.DB) error {
+		txRepository := service.repository.WithDB(tx)
+		if err := txRepository.Create(&window); err != nil {
+			return Internal("could not create contact window", err)
+		}
+		return service.audit.RecordTx(tx, actor, requestID, "window.created", "contact_window", auditID(window.ID), map[string]any{"source_version": window.SourceVersion}, nil, windowSummary(window))
+	})
+	if err != nil {
 		return dto.ContactWindowResponse{}, err
 	}
 	return service.Get(window.ID)
@@ -98,18 +124,27 @@ func (service *ContactWindowService) Update(id uint, request dto.UpdateContactWi
 		"elevation_peak_deg": request.ElevationPeakDeg, "window_status": request.WindowStatus, "priority": request.Priority,
 		"source_version": strings.TrimSpace(request.SourceVersion),
 	}
-	updated, err := service.repository.Update(id, request.ExpectedVersion, values)
+	var after model.ContactWindow
+	// Update the window and record the audit event in one transaction so a
+	// disconnect rolls the status change back instead of leaving a half-written
+	// mutation committed without its audit trail.
+	err = service.repository.DB().Transaction(func(tx *gorm.DB) error {
+		txRepository := service.repository.WithDB(tx)
+		updated, err := txRepository.Update(id, request.ExpectedVersion, values)
+		if err != nil {
+			return Internal("could not update contact window", err)
+		}
+		if !updated {
+			return Conflict("version_conflict", "contact window changed; reload before updating", nil)
+		}
+		loaded, err := txRepository.Get(id)
+		if err != nil {
+			return MapRepositoryError("contact window", err)
+		}
+		after = loaded
+		return service.audit.RecordTx(tx, actor, requestID, "window.updated", "contact_window", auditID(id), map[string]any{"expected_version": request.ExpectedVersion}, windowSummary(before), windowSummary(after))
+	})
 	if err != nil {
-		return dto.ContactWindowResponse{}, Internal("could not update contact window", err)
-	}
-	if !updated {
-		return dto.ContactWindowResponse{}, Conflict("version_conflict", "contact window changed; reload before updating", nil)
-	}
-	after, err := service.repository.Get(id)
-	if err != nil {
-		return dto.ContactWindowResponse{}, MapRepositoryError("contact window", err)
-	}
-	if err := service.audit.Record(actor, requestID, "window.updated", "contact_window", auditID(id), map[string]any{"expected_version": request.ExpectedVersion}, windowSummary(before), windowSummary(after)); err != nil {
 		return dto.ContactWindowResponse{}, err
 	}
 	return service.Get(id)
@@ -133,15 +168,24 @@ func (service *ContactWindowService) Submit(id uint, request dto.WindowActionReq
 	if err := validateOperational(before, station, asset); err != nil {
 		return dto.ContactWindowResponse{}, err
 	}
-	updated, err := service.repository.Update(id, request.ExpectedVersion, map[string]any{"window_status": constants.WindowStatusSubmitted})
+	var after model.ContactWindow
+	// Transition the status and record the audit event in one transaction so a
+	// disconnect rolls the status change back instead of committing it without a
+	// trace.
+	err = service.repository.DB().Transaction(func(tx *gorm.DB) error {
+		txRepository := service.repository.WithDB(tx)
+		updated, err := txRepository.Update(id, request.ExpectedVersion, map[string]any{"window_status": constants.WindowStatusSubmitted})
+		if err != nil {
+			return Internal("could not submit contact window", err)
+		}
+		if !updated {
+			return Conflict("version_conflict", "contact window changed; reload before submitting", nil)
+		}
+		loaded, _ := txRepository.Get(id)
+		after = loaded
+		return service.audit.RecordTx(tx, actor, requestID, "window.submitted", "contact_window", auditID(id), map[string]any{"compatibility_checked": true, "expected_version": request.ExpectedVersion}, windowSummary(before), windowSummary(after))
+	})
 	if err != nil {
-		return dto.ContactWindowResponse{}, Internal("could not submit contact window", err)
-	}
-	if !updated {
-		return dto.ContactWindowResponse{}, Conflict("version_conflict", "contact window changed; reload before submitting", nil)
-	}
-	after, _ := service.repository.Get(id)
-	if err := service.audit.Record(actor, requestID, "window.submitted", "contact_window", auditID(id), map[string]any{"compatibility_checked": true, "expected_version": request.ExpectedVersion}, windowSummary(before), windowSummary(after)); err != nil {
 		return dto.ContactWindowResponse{}, err
 	}
 	return service.Get(id)
@@ -162,15 +206,23 @@ func (service *ContactWindowService) Lock(id uint, request dto.WindowActionReque
 	if err := validateOperational(before, station, asset); err != nil {
 		return dto.ContactWindowResponse{}, err
 	}
-	updated, err := service.repository.Update(id, request.ExpectedVersion, map[string]any{"locked": true, "window_status": constants.WindowStatusLocked})
+	var after model.ContactWindow
+	// Lock the window and record the audit event in one transaction so a
+	// disconnect rolls the lock back instead of committing it without a trace.
+	err = service.repository.DB().Transaction(func(tx *gorm.DB) error {
+		txRepository := service.repository.WithDB(tx)
+		updated, err := txRepository.Update(id, request.ExpectedVersion, map[string]any{"locked": true, "window_status": constants.WindowStatusLocked})
+		if err != nil {
+			return Internal("could not lock contact window", err)
+		}
+		if !updated {
+			return Conflict("version_conflict", "contact window changed; reload before locking", nil)
+		}
+		loaded, _ := txRepository.Get(id)
+		after = loaded
+		return service.audit.RecordTx(tx, actor, requestID, "window.locked", "contact_window", auditID(id), map[string]any{"expected_version": request.ExpectedVersion}, windowSummary(before), windowSummary(after))
+	})
 	if err != nil {
-		return dto.ContactWindowResponse{}, Internal("could not lock contact window", err)
-	}
-	if !updated {
-		return dto.ContactWindowResponse{}, Conflict("version_conflict", "contact window changed; reload before locking", nil)
-	}
-	after, _ := service.repository.Get(id)
-	if err := service.audit.Record(actor, requestID, "window.locked", "contact_window", auditID(id), map[string]any{"expected_version": request.ExpectedVersion}, windowSummary(before), windowSummary(after)); err != nil {
 		return dto.ContactWindowResponse{}, err
 	}
 	return service.Get(id)

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,12 +26,44 @@ type ConflictResolutionService struct {
 	assets     *repository.SatelliteAssetRepository
 	audit      *AuditService
 	weights    scheduler.Weights
+	ctx        context.Context
 }
 
 func NewConflictResolutionService(conflicts *repository.ConflictResolutionRepository, windows *repository.ContactWindowRepository, stations *repository.GroundStationRepository, assets *repository.SatelliteAssetRepository, audit *AuditService, weights config.Weights) *ConflictResolutionService {
 	return &ConflictResolutionService{
 		repository: conflicts, windows: windows, stations: stations, assets: assets, audit: audit,
 		weights: scheduler.Weights{PriorityLoss: weights.PriorityLoss, MovementDistance: weights.MovementDistance, ContactDuration: weights.ContactDuration, ResourceMargin: weights.ResourceMargin},
+	}
+}
+
+// WithContext returns a copy of the service whose repositories and audit log
+// are bound to the request context. When the client disconnects, in-flight
+// queries are cancelled, open transactions roll back, and long detection loops
+// stop early via ctx. Method signatures stay unchanged.
+func (service *ConflictResolutionService) WithContext(ctx context.Context) *ConflictResolutionService {
+	return &ConflictResolutionService{
+		repository: service.repository.WithContext(ctx),
+		windows:    service.windows.WithContext(ctx),
+		stations:   service.stations.WithContext(ctx),
+		assets:     service.assets.WithContext(ctx),
+		audit:      service.audit.WithContext(ctx),
+		weights:    service.weights,
+		ctx:        ctx,
+	}
+}
+
+// cancelled reports whether the carried request context has been cancelled.
+// Returns false when the service was not bound to a context (e.g. direct calls
+// in tests).
+func (service *ConflictResolutionService) cancelled() bool {
+	if service.ctx == nil {
+		return false
+	}
+	select {
+	case <-service.ctx.Done():
+		return true
+	default:
+		return false
 	}
 }
 
@@ -94,6 +127,12 @@ func (service *ConflictResolutionService) Detect(request dto.DetectConflictsRequ
 	generator := scheduler.NewCandidateGenerator(service.weights, stations, assets, windows)
 	responses := make([]dto.ConflictResolutionResponse, 0, len(groups))
 	for _, group := range groups {
+		// Stop persisting new conflict resolutions as soon as the client
+		// disconnects; anything already committed inside its own transaction
+		// stays, but no further writes are made against a cancelled request.
+		if service.cancelled() {
+			return dto.DetectionResult{}, Cancelled()
+		}
 		resolution, err := service.persistDetection(group, generator.Generate(group), actor, requestID)
 		if err != nil {
 			return dto.DetectionResult{}, err
@@ -162,15 +201,23 @@ func (service *ConflictResolutionService) Submit(id uint, request dto.ConflictAc
 	if !constants.CanTransitionResolution(before.ResolutionStatus, constants.ResolutionStatusPendingReview) {
 		return dto.ConflictResolutionResponse{}, Conflict("invalid_state", "only proposed conflicts can be submitted for review", nil)
 	}
-	updated, err := service.repository.Transition(service.repository.DB(), id, request.ExpectedVersion, constants.ResolutionStatusProposed, constants.ResolutionStatusPendingReview, map[string]any{})
+	var after model.ConflictResolution
+	// Transition the status and record the audit event in one transaction so a
+	// disconnect rolls the status change back instead of committing it without
+	// a trace.
+	err = service.repository.DB().Transaction(func(tx *gorm.DB) error {
+		updated, err := service.repository.Transition(tx, id, request.ExpectedVersion, constants.ResolutionStatusProposed, constants.ResolutionStatusPendingReview, map[string]any{})
+		if err != nil {
+			return Internal("could not submit conflict resolution", err)
+		}
+		if !updated {
+			return Conflict("version_conflict", "conflict resolution changed; reload before submitting", nil)
+		}
+		loaded, _ := service.repository.WithDB(tx).Get(id)
+		after = loaded
+		return service.audit.RecordTx(tx, actor, requestID, "conflict.submitted", "conflict_resolution", auditID(id), map[string]any{"expected_version": request.ExpectedVersion}, resolutionSummary(before), resolutionSummary(after))
+	})
 	if err != nil {
-		return dto.ConflictResolutionResponse{}, Internal("could not submit conflict resolution", err)
-	}
-	if !updated {
-		return dto.ConflictResolutionResponse{}, Conflict("version_conflict", "conflict resolution changed; reload before submitting", nil)
-	}
-	after, _ := service.repository.Get(id)
-	if err := service.audit.Record(actor, requestID, "conflict.submitted", "conflict_resolution", auditID(id), map[string]any{"expected_version": request.ExpectedVersion}, resolutionSummary(before), resolutionSummary(after)); err != nil {
 		return dto.ConflictResolutionResponse{}, err
 	}
 	return resolutionResponse(after)

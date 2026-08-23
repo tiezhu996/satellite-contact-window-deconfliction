@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -18,6 +19,15 @@ func NewSatelliteAssetRepository(db *gorm.DB) *SatelliteAssetRepository {
 func (repository *SatelliteAssetRepository) WithDB(db *gorm.DB) *SatelliteAssetRepository {
 	return &SatelliteAssetRepository{db: db}
 }
+
+// WithContext returns a copy of the repository bound to the request context so
+// that the underlying connection (and any in-flight query) is cancelled when the
+// client disconnects. Repository method signatures stay unchanged.
+func (repository *SatelliteAssetRepository) WithContext(ctx context.Context) *SatelliteAssetRepository {
+	return &SatelliteAssetRepository{db: repository.db.WithContext(ctx)}
+}
+
+func (repository *SatelliteAssetRepository) DB() *gorm.DB { return repository.db }
 
 func (repository *SatelliteAssetRepository) List(page, pageSize int, status, search string) ([]model.SatelliteAsset, int64, error) {
 	query := repository.db.Model(&model.SatelliteAsset{})

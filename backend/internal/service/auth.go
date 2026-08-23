@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -14,6 +15,12 @@ import (
 	"satellite-contact-window-deconfliction/backend/internal/dto"
 	"satellite-contact-window-deconfliction/backend/internal/repository"
 )
+
+// StatusClientClosedRequest mirrors nginx's 499: the client went away before
+// the response was written. Using it (rather than 500) keeps cancellation out of
+// the 5xx error metrics and signals the access log that the request was
+// abandoned, not failed.
+const StatusClientClosedRequest = 499
 
 type AppError struct {
 	Status  int
@@ -59,6 +66,30 @@ func MapRepositoryError(resource string, err error) error {
 		return NotFound(resource, err)
 	}
 	return Internal("database operation failed", err)
+}
+
+// Cancelled is the error returned when the carried request context was
+// cancelled (the client disconnected) before the operation could finish.
+func Cancelled() *AppError {
+	return &AppError{Status: StatusClientClosedRequest, Code: "client_closed", Message: "client closed the request before it completed"}
+}
+
+// MapRequestError converts a context or database cancellation into a clean
+// client-closed error so it is not reported as an internal failure. Any other
+// error is returned untouched.
+func MapRequestError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return Cancelled()
+	}
+	// GORM wraps driver errors that surface after context cancellation as
+	// "context canceled" too; catch the textual form as a fallback.
+	if strings.Contains(err.Error(), "context canceled") || strings.Contains(err.Error(), "context deadline exceeded") {
+		return Cancelled()
+	}
+	return err
 }
 
 type Claims struct {

@@ -1,8 +1,11 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
+
+	"gorm.io/gorm"
 
 	"satellite-contact-window-deconfliction/backend/internal/dto"
 	"satellite-contact-window-deconfliction/backend/internal/model"
@@ -16,6 +19,14 @@ type GroundStationService struct {
 
 func NewGroundStationService(repository *repository.GroundStationRepository, audit *AuditService) *GroundStationService {
 	return &GroundStationService{repository: repository, audit: audit}
+}
+
+// WithContext returns a copy of the service whose repository and audit log are
+// bound to the request context. When the client disconnects, in-flight queries
+// are cancelled and open transactions roll back. Method signatures stay
+// unchanged.
+func (service *GroundStationService) WithContext(ctx context.Context) *GroundStationService {
+	return &GroundStationService{repository: service.repository.WithContext(ctx), audit: service.audit.WithContext(ctx)}
 }
 
 func (service *GroundStationService) List(page, pageSize int, status, search string) ([]dto.GroundStationResponse, dto.PageMeta, error) {
@@ -44,14 +55,21 @@ func (service *GroundStationService) Create(request dto.CreateGroundStationReque
 		Longitude: request.Longitude, AntennaCount: request.AntennaCount, SupportedBandsJSON: encodeStrings(uniqueStrings(request.SupportedBands)),
 		SlewBufferSec: request.SlewBufferSec, StationStatus: request.StationStatus, Version: 1,
 	}
-	if err := service.repository.Create(&station); err != nil {
-		if strings.Contains(strings.ToLower(err.Error()), "unique") {
-			return dto.GroundStationResponse{}, Conflict("duplicate_station_code", "station_code already exists", err)
+	// Create the station and record the audit event in one transaction so a
+	// disconnect rolls both back instead of leaving a station without its
+	// audit trail.
+	err := service.repository.DB().Transaction(func(tx *gorm.DB) error {
+		txRepository := service.repository.WithDB(tx)
+		if err := txRepository.Create(&station); err != nil {
+			if strings.Contains(strings.ToLower(err.Error()), "unique") {
+				return Conflict("duplicate_station_code", "station_code already exists", err)
+			}
+			return Internal("could not create ground station", err)
 		}
-		return dto.GroundStationResponse{}, Internal("could not create ground station", err)
-	}
-	after := stationSummary(station)
-	if err := service.audit.Record(actor, requestID, "station.created", "ground_station", auditID(station.ID), map[string]any{"station_code": station.StationCode}, nil, after); err != nil {
+		after := stationSummary(station)
+		return service.audit.RecordTx(tx, actor, requestID, "station.created", "ground_station", auditID(station.ID), map[string]any{"station_code": station.StationCode}, nil, after)
+	})
+	if err != nil {
 		return dto.GroundStationResponse{}, err
 	}
 	return stationResponse(station), nil
@@ -67,18 +85,26 @@ func (service *GroundStationService) Update(id uint, request dto.UpdateGroundSta
 		"antenna_count": request.AntennaCount, "supported_bands_json": encodeStrings(uniqueStrings(request.SupportedBands)),
 		"slew_buffer_sec": request.SlewBufferSec, "station_status": request.StationStatus,
 	}
-	updated, err := service.repository.Update(id, request.ExpectedVersion, values)
+	var after model.GroundStation
+	// Update the station and record the audit event in one transaction so a
+	// disconnect rolls the change back instead of committing it without a trace.
+	err = service.repository.DB().Transaction(func(tx *gorm.DB) error {
+		txRepository := service.repository.WithDB(tx)
+		updated, err := txRepository.Update(id, request.ExpectedVersion, values)
+		if err != nil {
+			return Internal("could not update ground station", err)
+		}
+		if !updated {
+			return Conflict("version_conflict", "ground station changed; reload before updating", nil)
+		}
+		loaded, err := txRepository.Get(id)
+		if err != nil {
+			return MapRepositoryError("ground station", err)
+		}
+		after = loaded
+		return service.audit.RecordTx(tx, actor, requestID, "station.updated", "ground_station", auditID(id), map[string]any{"expected_version": request.ExpectedVersion}, stationSummary(before), stationSummary(after))
+	})
 	if err != nil {
-		return dto.GroundStationResponse{}, Internal("could not update ground station", err)
-	}
-	if !updated {
-		return dto.GroundStationResponse{}, Conflict("version_conflict", "ground station changed; reload before updating", nil)
-	}
-	after, err := service.repository.Get(id)
-	if err != nil {
-		return dto.GroundStationResponse{}, MapRepositoryError("ground station", err)
-	}
-	if err := service.audit.Record(actor, requestID, "station.updated", "ground_station", auditID(id), map[string]any{"expected_version": request.ExpectedVersion}, stationSummary(before), stationSummary(after)); err != nil {
 		return dto.GroundStationResponse{}, err
 	}
 	return stationResponse(after), nil

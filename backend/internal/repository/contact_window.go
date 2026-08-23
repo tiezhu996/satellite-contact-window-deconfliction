@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -20,6 +21,15 @@ func NewContactWindowRepository(db *gorm.DB) *ContactWindowRepository {
 func (repository *ContactWindowRepository) WithDB(db *gorm.DB) *ContactWindowRepository {
 	return &ContactWindowRepository{db: db}
 }
+
+// WithContext returns a copy of the repository bound to the request context so
+// that the underlying connection (and any in-flight query) is cancelled when the
+// client disconnects. Repository method signatures stay unchanged.
+func (repository *ContactWindowRepository) WithContext(ctx context.Context) *ContactWindowRepository {
+	return &ContactWindowRepository{db: repository.db.WithContext(ctx)}
+}
+
+func (repository *ContactWindowRepository) DB() *gorm.DB { return repository.db }
 
 func (repository *ContactWindowRepository) List(filter dto.ContactWindowFilter) ([]model.ContactWindow, int64, error) {
 	query := repository.db.Model(&model.ContactWindow{})

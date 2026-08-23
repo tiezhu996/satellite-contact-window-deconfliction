@@ -63,7 +63,7 @@ func (handler *SystemHandler) Ready(context *gin.Context) {
 
 func (handler *SystemHandler) Audit(context *gin.Context) {
 	page, pageSize := Pagination(context)
-	events, meta, err := handler.audit.List(page, pageSize, context.Query("resource_type"), context.Query("action"))
+	events, meta, err := handler.audit.WithContext(context.Request.Context()).List(page, pageSize, context.Query("resource_type"), context.Query("action"))
 	if err != nil {
 		WriteError(context, err)
 		return
@@ -90,12 +90,17 @@ func WritePage(context *gin.Context, data any, meta dto.PageMeta) {
 }
 
 func WriteError(context *gin.Context, err error) {
+	// A client disconnect surfaces as a context cancellation; translate it to
+	// a 499 client-closed response rather than logging it as a 5xx failure.
+	err = service.MapRequestError(err)
 	appError := &service.AppError{}
 	if !errors.As(err, &appError) {
 		appError = service.Internal("unexpected server error", err)
 	}
 	if appError.Status >= 500 {
 		slog.Error("request failed", "request_id", RequestID(context), "code", appError.Code, "error", appError.Error())
+	} else if appError.Status == service.StatusClientClosedRequest {
+		slog.Info("request cancelled by client", "request_id", RequestID(context), "route", context.FullPath())
 	}
 	context.AbortWithStatusJSON(appError.Status, gin.H{"error": gin.H{"code": appError.Code, "message": appError.Message}, "request_id": RequestID(context)})
 }

@@ -17,6 +17,12 @@ func NewContactWindowHandler(service *service.ContactWindowService) *ContactWind
 	return &ContactWindowHandler{service: service}
 }
 
+// serviceFor binds the service to the request context so that a client
+// disconnect cancels in-flight queries and rolls back open transactions.
+func (handler *ContactWindowHandler) serviceFor(context *gin.Context) *service.ContactWindowService {
+	return handler.service.WithContext(context.Request.Context())
+}
+
 func (handler *ContactWindowHandler) List(context *gin.Context) {
 	page, pageSize := Pagination(context)
 	filter := dto.ContactWindowFilter{Page: page, PageSize: pageSize, Status: context.Query("status")}
@@ -38,7 +44,7 @@ func (handler *ContactWindowHandler) List(context *gin.Context) {
 		}
 		filter.To = &parsed
 	}
-	windows, meta, err := handler.service.List(filter)
+	windows, meta, err := handler.serviceFor(context).List(filter)
 	if err != nil {
 		WriteError(context, err)
 		return
@@ -52,7 +58,7 @@ func (handler *ContactWindowHandler) Get(context *gin.Context) {
 		WriteError(context, err)
 		return
 	}
-	window, err := handler.service.Get(id)
+	window, err := handler.serviceFor(context).Get(id)
 	if err != nil {
 		WriteError(context, err)
 		return
@@ -66,7 +72,7 @@ func (handler *ContactWindowHandler) Create(context *gin.Context) {
 		WriteError(context, err)
 		return
 	}
-	window, err := handler.service.Create(request, Actor(context), RequestID(context))
+	window, err := handler.serviceFor(context).Create(request, Actor(context), RequestID(context))
 	if err != nil {
 		WriteError(context, err)
 		return
@@ -85,7 +91,7 @@ func (handler *ContactWindowHandler) Update(context *gin.Context) {
 		WriteError(context, err)
 		return
 	}
-	window, err := handler.service.Update(id, request, Actor(context), RequestID(context))
+	window, err := handler.serviceFor(context).Update(id, request, Actor(context), RequestID(context))
 	if err != nil {
 		WriteError(context, err)
 		return
@@ -109,9 +115,9 @@ func (handler *ContactWindowHandler) action(context *gin.Context, lock bool) {
 	}
 	var window dto.ContactWindowResponse
 	if lock {
-		window, err = handler.service.Lock(id, request, Actor(context), RequestID(context))
+		window, err = handler.serviceFor(context).Lock(id, request, Actor(context), RequestID(context))
 	} else {
-		window, err = handler.service.Submit(id, request, Actor(context), RequestID(context))
+		window, err = handler.serviceFor(context).Submit(id, request, Actor(context), RequestID(context))
 	}
 	if err != nil {
 		WriteError(context, err)

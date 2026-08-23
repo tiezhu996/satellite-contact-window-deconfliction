@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"fmt"
 
 	"gorm.io/gorm"
@@ -15,6 +16,13 @@ func (repository *SystemRepository) WithDB(db *gorm.DB) *SystemRepository {
 	return &SystemRepository{db: db}
 }
 func (repository *SystemRepository) DB() *gorm.DB { return repository.db }
+
+// WithContext returns a copy of the repository bound to the request context so
+// that the underlying connection (and any in-flight query) is cancelled when the
+// client disconnects. Repository method signatures stay unchanged.
+func (repository *SystemRepository) WithContext(ctx context.Context) *SystemRepository {
+	return &SystemRepository{db: repository.db.WithContext(ctx)}
+}
 
 func (repository *SystemRepository) FindUser(username string) (model.User, error) {
 	var user model.User
