@@ -50,7 +50,6 @@ func SweepCapacity(windows []model.ContactWindow, capacity int, buffer time.Dura
 	})
 	active := map[uint]model.ContactWindow{}
 	groups := map[string][]model.ContactWindow{}
-	var shared []model.ContactWindow
 	for _, event := range events {
 		if !event.Start {
 			delete(active, event.Window.ID)
@@ -60,18 +59,20 @@ func SweepCapacity(windows []model.ContactWindow, capacity int, buffer time.Dura
 		if len(active) <= capacity {
 			continue
 		}
-		shared = shared[:0]
-		for _, window := range active {
-			shared = append(shared, window)
+		// Allocate a fresh slice per overrun so stored groups never share a backing
+		// array; reusing one corrupted earlier entries when a later overrun
+		// rewrote the same memory.
+		shared := make([]model.ContactWindow, 0, len(active))
+		for _, id := range sortedActiveIDs(active) {
+			shared = append(shared, active[id])
 		}
-		sort.Slice(shared, func(i, j int) bool { return shared[i].ID < shared[j].ID })
 		groups[windowSetKey(shared)] = shared
 	}
 	result := make([][]model.ContactWindow, 0, len(groups))
 	for _, group := range groups {
 		result = append(result, group)
 	}
-	sort.Slice(result, func(i, j int) bool {
+	sort.SliceStable(result, func(i, j int) bool {
 		if result[i][0].ID == result[j][0].ID {
 			return len(result[i]) < len(result[j])
 		}
@@ -80,10 +81,25 @@ func SweepCapacity(windows []model.ContactWindow, capacity int, buffer time.Dura
 	return mergeContainedGroups(result)
 }
 
+// mergeContainedGroups drops any group whose window set is a strict subset of
+// another group's. Without this, nested overlaps reported both the larger
+// cluster and its smaller subsets as separate conflicts.
 func mergeContainedGroups(groups [][]model.ContactWindow) [][]model.ContactWindow {
 	kept := make([][]model.ContactWindow, 0, len(groups))
-	for _, candidate := range groups {
-		kept = append(kept, candidate)
+	for index, candidate := range groups {
+		contained := false
+		for other := range groups {
+			if index == other {
+				continue
+			}
+			if isSubset(candidate, groups[other]) && len(candidate) < len(groups[other]) {
+				contained = true
+				break
+			}
+		}
+		if !contained {
+			kept = append(kept, candidate)
+		}
 	}
 	return kept
 }
@@ -99,6 +115,15 @@ func isSubset(left, right []model.ContactWindow) bool {
 		}
 	}
 	return true
+}
+
+func sortedActiveIDs(active map[uint]model.ContactWindow) []uint {
+	ids := make([]uint, 0, len(active))
+	for id := range active {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	return ids
 }
 
 func windowSetKey(windows []model.ContactWindow) string {

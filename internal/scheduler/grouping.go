@@ -44,16 +44,29 @@ func Detect(context DetectionContext) []ConflictGroup {
 			continue
 		}
 		windows := byStation[stationID]
-		raw := SweepCapacity(windows, station.AntennaCount, 0)
-		rawSets := map[string]bool{}
-		for _, conflictWindows := range raw {
-			rawSets[windowSetKey(conflictWindows)] = true
+		buffer := time.Duration(station.SlewBufferSec) * time.Second
+		capacityGroups := SweepCapacity(windows, station.AntennaCount, 0)
+		for _, conflictWindows := range capacityGroups {
 			groups = append(groups, newGroup(constants.ConflictTypeStationCapacity, conflictWindows, station.AntennaCount, len(conflictWindows), 0,
 				fmt.Sprintf("%s exceeds %d available antenna channel(s)", station.StationCode, station.AntennaCount),
 				map[string]any{"station_id": station.ID, "station_code": station.StationCode}))
 		}
-		expanded := SweepCapacity(windows, station.AntennaCount, time.Duration(station.SlewBufferSec)*time.Second)
-		for _, conflictWindows := range expanded {
+		if station.SlewBufferSec <= 0 {
+			continue
+		}
+		// A buffer sweep that includes the slew gap is stricter than the
+		// capacity sweep. Only report the windows whose padded intervals
+		// collide but whose actual contact intervals do not — those are the
+		// buffer-only conflicts. Reporting the buffer sweep verbatim would
+		// duplicate every capacity conflict for the same cluster.
+		capacitySets := make(map[string]bool, len(capacityGroups))
+		for _, conflictWindows := range capacityGroups {
+			capacitySets[windowSetKey(conflictWindows)] = true
+		}
+		for _, conflictWindows := range SweepCapacity(windows, station.AntennaCount, buffer) {
+			if capacitySets[windowSetKey(conflictWindows)] {
+				continue
+			}
 			groups = append(groups, newGroup(constants.ConflictTypeSlewBuffer, conflictWindows, station.AntennaCount, len(conflictWindows), station.SlewBufferSec,
 				fmt.Sprintf("%s requires a %d second slew buffer", station.StationCode, station.SlewBufferSec),
 				map[string]any{"station_id": station.ID, "station_code": station.StationCode}))
@@ -96,7 +109,8 @@ func Detect(context DetectionContext) []ConflictGroup {
 
 func newGroup(conflictType string, windows []model.ContactWindow, capacity, peak, buffer int, summary string, metadata map[string]any) ConflictGroup {
 	sort.Slice(windows, func(i, j int) bool { return windows[i].ID < windows[j].ID })
-	parts := make([]string, 0, len(windows))
+	parts := make([]string, 0, len(windows)+1)
+	parts = append(parts, conflictType)
 	for _, window := range windows {
 		parts = append(parts, fmt.Sprintf("%d@%d", window.ID, window.Version))
 	}
