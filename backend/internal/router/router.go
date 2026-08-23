@@ -33,11 +33,11 @@ func New(db *gorm.DB, cfg config.Config) *gin.Engine {
 	api := engine.Group("/api/v1")
 	api.POST("/auth/login", handlers.system.Login)
 	protected := api.Group("")
+	protected.Use(middleware.Auth(handlers.auth))
 	registerStationRoutes(protected, handlers.stations)
 	registerSatelliteRoutes(protected, handlers.satellites)
 	registerWindowRoutes(protected, handlers.windows)
 	registerConflictRoutes(protected, handlers.conflicts)
-	protected.Use(middleware.Auth(handlers.auth))
 	protected.GET("/audit", middleware.RBAC(constants.RoleReviewer, constants.RoleAdmin), handlers.system.Audit)
 	engine.NoRoute(func(context *gin.Context) {
 		context.JSON(http.StatusNotFound, gin.H{"error": gin.H{"code": "route_not_found", "message": "route was not found"}, "request_id": context.GetString("request_id")})

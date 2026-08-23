@@ -14,7 +14,7 @@ func registerConflictRoutes(api *gin.RouterGroup, conflictHandler *handler.Confl
 	planning := api.Group("/conflicts", middleware.RBAC(constants.RoleScheduler, constants.RoleAdmin))
 	planning.POST("/detect", conflictHandler.Detect)
 	planning.POST("/:id/submit", conflictHandler.Submit)
-	planning.GET("/:id/export", conflictHandler.Export)
 	review := api.Group("/conflicts", middleware.RBAC(constants.RoleReviewer, constants.RoleAdmin))
 	review.POST("/:id/review", conflictHandler.Review)
+	review.GET("/:id/export", conflictHandler.Export)
 }

@@ -15,6 +15,5 @@ func registerWindowRoutes(api *gin.RouterGroup, windowHandler *handler.ContactWi
 	planning.POST("", windowHandler.Create)
 	planning.PUT("/:id", windowHandler.Update)
 	planning.POST("/:id/submit", windowHandler.Submit)
-	reviewerLock := api.Group("/windows", middleware.RBAC(constants.RoleReviewer, constants.RoleAdmin))
-	reviewerLock.POST("/:id/lock", windowHandler.Lock)
+	planning.POST("/:id/lock", windowHandler.Lock)
 }

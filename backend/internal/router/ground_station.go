@@ -11,7 +11,7 @@ import (
 func registerStationRoutes(api *gin.RouterGroup, stationHandler *handler.GroundStationHandler) {
 	api.GET("/stations", stationHandler.List)
 	api.GET("/stations/:id", stationHandler.Get)
-	planning := api.Group("/stations", middleware.RBAC(constants.RoleReviewer, constants.RoleAdmin))
+	planning := api.Group("/stations", middleware.RBAC(constants.RoleScheduler, constants.RoleAdmin))
 	planning.POST("", stationHandler.Create)
 	planning.PUT("/:id", stationHandler.Update)
 }

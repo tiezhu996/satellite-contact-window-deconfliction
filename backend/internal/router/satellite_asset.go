@@ -11,8 +11,7 @@ import (
 func registerSatelliteRoutes(api *gin.RouterGroup, assetHandler *handler.SatelliteAssetHandler) {
 	api.GET("/satellites", assetHandler.List)
 	api.GET("/satellites/:id", assetHandler.Get)
-	planning := api.Group("/satellites", middleware.RBAC(constants.RoleScheduler))
+	planning := api.Group("/satellites", middleware.RBAC(constants.RoleScheduler, constants.RoleAdmin))
 	planning.POST("", assetHandler.Create)
-	reviewerUpdate := api.Group("/satellites", middleware.RBAC(constants.RoleReviewer, constants.RoleAdmin))
-	reviewerUpdate.PUT("/:id", assetHandler.Update)
+	planning.PUT("/:id", assetHandler.Update)
 }
