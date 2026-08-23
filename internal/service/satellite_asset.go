@@ -49,7 +49,7 @@ func (service *SatelliteAssetService) Create(request dto.CreateSatelliteAssetReq
 		}
 		return dto.SatelliteAssetResponse{}, Internal("could not create satellite asset", err)
 	}
-	if err := service.audit.Record(actor, requestID, "satellite.created", "satellite_asset", auditID(asset.ID), map[string]any{"satellite_code": asset.SatelliteCode}, satelliteSummary(asset), nil); err != nil {
+	if err := service.audit.Record(actor, requestID, "satellite.created", "satellite_asset", auditID(asset.ID), map[string]any{"satellite_code": asset.SatelliteCode}, nil, satelliteSummary(asset)); err != nil {
 		return dto.SatelliteAssetResponse{}, err
 	}
 	return satelliteResponse(asset), nil
@@ -75,10 +75,10 @@ func (service *SatelliteAssetService) Update(id uint, request dto.UpdateSatellit
 	if err != nil {
 		return dto.SatelliteAssetResponse{}, MapRepositoryError("satellite asset", err)
 	}
-	if err := service.audit.Record(actor, requestID, "satellite.updated", "satellite_asset", auditID(id), map[string]any{"expected_version": request.ExpectedVersion}, satelliteSummary(after), satelliteSummary(before)); err != nil {
+	if err := service.audit.Record(actor, requestID, "satellite.updated", "satellite_asset", auditID(id), map[string]any{"expected_version": request.ExpectedVersion}, satelliteSummary(before), satelliteSummary(after)); err != nil {
 		return dto.SatelliteAssetResponse{}, err
 	}
-	return satelliteResponse(before), nil
+	return satelliteResponse(after), nil
 }
 
 func satelliteResponse(asset model.SatelliteAsset) dto.SatelliteAssetResponse {

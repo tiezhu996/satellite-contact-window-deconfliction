@@ -51,7 +51,7 @@ func (service *GroundStationService) Create(request dto.CreateGroundStationReque
 		return dto.GroundStationResponse{}, Internal("could not create ground station", err)
 	}
 	after := stationSummary(station)
-	if err := service.audit.Record(actor, requestID, "station.created", "ground_station", auditID(station.ID), map[string]any{"station_code": station.StationCode}, after, nil); err != nil {
+	if err := service.audit.Record(actor, requestID, "station.created", "ground_station", auditID(station.ID), map[string]any{"station_code": station.StationCode}, nil, after); err != nil {
 		return dto.GroundStationResponse{}, err
 	}
 	return stationResponse(station), nil
@@ -78,10 +78,10 @@ func (service *GroundStationService) Update(id uint, request dto.UpdateGroundSta
 	if err != nil {
 		return dto.GroundStationResponse{}, MapRepositoryError("ground station", err)
 	}
-	if err := service.audit.Record(actor, requestID, "station.updated", "ground_station", auditID(id), map[string]any{"expected_version": request.ExpectedVersion}, stationSummary(after), stationSummary(before)); err != nil {
+	if err := service.audit.Record(actor, requestID, "station.updated", "ground_station", auditID(id), map[string]any{"expected_version": request.ExpectedVersion}, stationSummary(before), stationSummary(after)); err != nil {
 		return dto.GroundStationResponse{}, err
 	}
-	return stationResponse(before), nil
+	return stationResponse(after), nil
 }
 
 func stationResponse(station model.GroundStation) dto.GroundStationResponse {
