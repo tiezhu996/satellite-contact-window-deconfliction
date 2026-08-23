@@ -162,11 +162,17 @@ func (service *ConflictResolutionService) Submit(id uint, request dto.ConflictAc
 	if !constants.CanTransitionResolution(before.ResolutionStatus, constants.ResolutionStatusPendingReview) {
 		return dto.ConflictResolutionResponse{}, Conflict("invalid_state", "only proposed conflicts can be submitted for review", nil)
 	}
-	_, err = service.repository.Transition(service.repository.DB(), id, request.ExpectedVersion, constants.ResolutionStatusProposed, constants.ResolutionStatusPendingReview, map[string]any{})
+	updated, err := service.repository.Transition(service.repository.DB(), id, request.ExpectedVersion, constants.ResolutionStatusProposed, constants.ResolutionStatusPendingReview, map[string]any{})
 	if err != nil {
 		return dto.ConflictResolutionResponse{}, Internal("could not submit conflict resolution", err)
 	}
-	after, _ := service.repository.Get(id)
+	if !updated {
+		return dto.ConflictResolutionResponse{}, Conflict("version_conflict", "conflict resolution changed; reload before submitting", nil)
+	}
+	after, err := service.repository.Get(id)
+	if err != nil {
+		return dto.ConflictResolutionResponse{}, MapRepositoryError("conflict resolution", err)
+	}
 	if err := service.audit.Record(actor, requestID, "conflict.submitted", "conflict_resolution", auditID(id), map[string]any{"expected_version": request.ExpectedVersion}, resolutionSummary(before), resolutionSummary(after)); err != nil {
 		return dto.ConflictResolutionResponse{}, err
 	}
@@ -222,6 +228,9 @@ func (service *ConflictResolutionService) Export(id uint) (map[string]any, error
 	resolution, err := service.Get(id)
 	if err != nil {
 		return nil, err
+	}
+	if resolution.ResolutionStatus != constants.ResolutionStatusAccepted {
+		return nil, Conflict("invalid_state", "only accepted conflicts can be exported", nil)
 	}
 	return map[string]any{
 		"record_type": "offline_contact_planning_decision", "resolution_id": resolution.ID, "conflict_key": resolution.ConflictKey,

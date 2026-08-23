@@ -1,7 +1,6 @@
 package repository
 
 import (
-	"errors"
 	"fmt"
 
 	"gorm.io/gorm"
@@ -44,9 +43,6 @@ func (repository *ConflictResolutionRepository) List(page, pageSize int, status,
 func (repository *ConflictResolutionRepository) Get(id uint) (model.ConflictResolution, error) {
 	var resolution model.ConflictResolution
 	if err := repository.db.First(&resolution, id).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return model.ConflictResolution{}, nil
-		}
 		return resolution, fmt.Errorf("get conflict resolution %d: %w", id, err)
 	}
 	return resolution, nil

@@ -48,7 +48,10 @@ func (handler *ConflictResolutionHandler) Detect(context *gin.Context) {
 		return
 	}
 	result, err := handler.service.Detect(request, Actor(context), RequestID(context))
-	_ = err
+	if err != nil {
+		WriteError(context, err)
+		return
+	}
 	WriteData(context, http.StatusOK, result)
 }
 
